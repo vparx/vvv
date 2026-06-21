@@ -29,6 +29,10 @@
     font-size:11px;letter-spacing:.18em;text-transform:uppercase;
     color:var(--muted);margin:0 0 10px 3px;
   }
+  .version-tag{
+    letter-spacing:.04em;text-transform:none;color:#5d5763;
+    font-weight:600;
+  }
   .stage{
     position:relative;width:100%;border-radius:14px;overflow:hidden;
     background:#000;
@@ -68,7 +72,7 @@
 </head>
 <body>
   <div class="wrap">
-    <div class="eyebrow">VVV — Typography Flipper</div>
+    <div class="eyebrow">VVV — Typography Flipper <span class="version-tag">v1.0</span></div>
     <div class="stage">
       <canvas id="canvas" width="2124" height="1192"></canvas>
       <video id="bgVideo" muted loop playsinline preload="auto" style="position:absolute;width:2px;height:2px;top:-9999px;left:-9999px;opacity:0.01;"></video>
@@ -97,6 +101,9 @@
       </button>
       <button id="gifBtn" class="ctrl ghost" title="Export the full looping animation as a GIF">
         <span class="ic">⭳</span><span>Export GIF</span>
+      </button>
+      <button id="mp4Btn" class="ctrl ghost" title="Export the full looping animation as an MP4 video">
+        <span class="ic">⭳</span><span>Export MP4</span>
       </button>
     </div>
   </div>
@@ -335,7 +342,7 @@
       alert('The GIF encoder did not load — check your connection and try again.');
       return;
     }
-    gifBtn.disabled = true; pngBtn.disabled = true;
+    gifBtn.disabled = true; pngBtn.disabled = true; mp4Btn.disabled = true; bgBtn.disabled = true;
     overlay.hidden = false; gifStatus.textContent = 'Preparing…';
     try {
       const workerScript = await getWorkerUrl();
@@ -355,7 +362,7 @@
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
         overlay.hidden = true;
-        gifBtn.disabled = false; pngBtn.disabled = false;
+        gifBtn.disabled = false; pngBtn.disabled = false; mp4Btn.disabled = false; bgBtn.disabled = false;
       });
 
       gifStatus.textContent = 'Capturing frames…';
@@ -376,11 +383,116 @@
       gifStatus.textContent = 'Export failed — please try again.';
       setTimeout(function(){
         overlay.hidden = true;
-        gifBtn.disabled = false; pngBtn.disabled = false;
+        gifBtn.disabled = false; pngBtn.disabled = false; mp4Btn.disabled = false; bgBtn.disabled = false;
       }, 1800);
     }
   });
+
+  const mp4Btn = document.getElementById('mp4Btn');
+  mp4Btn.addEventListener('click', async function(){
+    if (!window.Mp4Exporter || !window.Mp4Exporter.supported) {
+      alert('MP4 export needs a browser with WebCodecs support — Chrome or Edge work best. You can use the GIF export instead.');
+      return;
+    }
+    mp4Btn.disabled = true; pngBtn.disabled = true; gifBtn.disabled = true; bgBtn.disabled = true;
+    overlay.hidden = false; gifStatus.textContent = 'Preparing…';
+    try {
+      await waitForVideoMetadata(exportVideo);
+      const off = document.createElement('canvas');
+      off.width = W; off.height = H;
+      const octx = off.getContext('2d');
+      const videoDuration = (exportVideo.duration && isFinite(exportVideo.duration)) ? exportVideo.duration : (TOTAL / 1000);
+
+      const blob = await window.Mp4Exporter.export(
+        async function(i){
+          const vt = ((i * FLASH) / 1000) % videoDuration;
+          await seekVideo(exportVideo, vt);
+          octx.clearRect(0, 0, W, H);
+          octx.drawImage(exportVideo, 0, 0, W, H);
+          drawVVV(octx, W, H, FONTS[i].css, FONTS[i].sizeMult);
+          return off;
+        },
+        FONTS.length,
+        FLASH,
+        W, H,
+        function(i, total){ gifStatus.textContent = 'Encoding MP4… ' + Math.round((i / total) * 100) + '%'; }
+      );
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'vvv-animation.mp4';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+    } catch (err) {
+      console.error(err);
+      gifStatus.textContent = 'Export failed — please try again.';
+      alert('MP4 export failed: ' + (err && err.message ? err.message : err));
+    } finally {
+      overlay.hidden = true;
+      mp4Btn.disabled = false; pngBtn.disabled = false; gifBtn.disabled = false; bgBtn.disabled = false;
+    }
+  });
 })();
+</script>
+
+<script type="module">
+  (async function(){
+    let Mp4Muxer;
+    try {
+      Mp4Muxer = await import('https://cdn.jsdelivr.net/npm/mp4-muxer@5/build/mp4-muxer.mjs');
+    } catch (e) {
+      console.warn('Could not load the MP4 muxer library — MP4 export will be unavailable.', e);
+      window.Mp4Exporter = { supported: false };
+      return;
+    }
+
+    window.Mp4Exporter = {
+      supported: typeof VideoEncoder !== 'undefined',
+
+      // frameFn(i) draws frame i onto a canvas and returns that canvas.
+      // frameCount frames total, each held for frameDurationMs in the final video.
+      async export(frameFn, frameCount, frameDurationMs, width, height, onProgress){
+        if (!this.supported) {
+          throw new Error('This browser does not support the WebCodecs VideoEncoder API.');
+        }
+        const muxer = new Mp4Muxer.Muxer({
+          target: new Mp4Muxer.ArrayBufferTarget(),
+          video: { codec: 'avc', width: width, height: height },
+          fastStart: 'in-memory'
+        });
+
+        const encoder = new VideoEncoder({
+          output: function(chunk, meta){ muxer.addVideoChunk(chunk, meta); },
+          error: function(e){ console.error('VideoEncoder error:', e); }
+        });
+
+        encoder.configure({
+          codec: 'avc1.640034',
+          width: width,
+          height: height,
+          bitrate: 10000000,
+          framerate: Math.max(1, Math.round(1000 / frameDurationMs))
+        });
+
+        const durationUs = frameDurationMs * 1000;
+        for (let i = 0; i < frameCount; i++) {
+          const canvasEl = await frameFn(i);
+          const frame = new VideoFrame(canvasEl, { timestamp: i * durationUs, duration: durationUs });
+          while (encoder.encodeQueueSize > 4) {
+            await new Promise(function(r){ setTimeout(r, 10); });
+          }
+          encoder.encode(frame, { keyFrame: true });
+          frame.close();
+          if (onProgress) onProgress(i + 1, frameCount);
+        }
+
+        await encoder.flush();
+        encoder.close();
+        muxer.finalize();
+        return new Blob([muxer.target.buffer], { type: 'video/mp4' });
+      }
+    };
+  })();
 </script>
 </body>
 </html>
