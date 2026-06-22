@@ -72,7 +72,7 @@
 </head>
 <body>
   <div class="wrap">
-    <div class="eyebrow">VVV — Typography Flipper <span class="version-tag">v1.1</span></div>
+    <div class="eyebrow">VVV — Typography Flipper <span class="version-tag">v1.2</span></div>
     <div class="stage">
       <canvas id="canvas" width="2124" height="1192"></canvas>
       <video id="bgVideo" muted loop playsinline preload="auto" style="position:absolute;width:2px;height:2px;top:-9999px;left:-9999px;opacity:0.01;"></video>
@@ -401,19 +401,26 @@
       const off = document.createElement('canvas');
       off.width = W; off.height = H;
       const octx = off.getContext('2d');
+
+      const FPS = 24;
+      const FRAME_MS = 1000 / FPS;
       const videoDuration = (exportVideo.duration && isFinite(exportVideo.duration)) ? exportVideo.duration : (TOTAL / 1000);
+      // Export exactly one full font cycle, aligned to frame boundaries
+      const totalFrames = Math.round((TOTAL / 1000) * FPS);
 
       const blob = await window.Mp4Exporter.export(
         async function(i){
-          const vt = ((i * FLASH) / 1000) % videoDuration;
+          const timeMs = i * FRAME_MS;
+          const vt = (timeMs / 1000) % videoDuration;
           await seekVideo(exportVideo, vt);
           octx.clearRect(0, 0, W, H);
           octx.drawImage(exportVideo, 0, 0, W, H);
-          drawVVV(octx, W, H, FONTS[i].css, FONTS[i].sizeMult);
+          const idx = fontIndexAt(timeMs);
+          drawVVV(octx, W, H, FONTS[idx].css, FONTS[idx].sizeMult);
           return off;
         },
-        FONTS.length,
-        FLASH,
+        totalFrames,
+        FRAME_MS,
         W, H,
         function(i, total){ gifStatus.textContent = 'Encoding MP4… ' + Math.round((i / total) * 100) + '%'; }
       );
@@ -471,7 +478,7 @@
           width: width,
           height: height,
           bitrate: 80000000,
-          framerate: Math.max(1, Math.round(1000 / frameDurationMs))
+          framerate: 24
         });
 
         const durationUs = frameDurationMs * 1000;
